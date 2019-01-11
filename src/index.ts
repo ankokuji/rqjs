@@ -8,10 +8,27 @@ const envGlobal = hasSelf ? self : global;
  * @interface ImportConfig
  */
 interface ImportConfig {
+  /**
+   * Config the baseUrl module should be fetch from.
+   *
+   * @type {string}
+   * @memberof ImportConfig
+   */
   baseUrl: string;
+  /**
+   * Definitions of fetch path for each module.
+   *
+   * @type {ImportPaths}
+   * @memberof ImportConfig
+   */
   paths: ImportPaths;
 }
 
+/**
+ * Map of path definitions.
+ *
+ * @interface ImportPaths
+ */
 interface ImportPaths {
   [alias: string]: string;
 }
@@ -22,7 +39,7 @@ interface ImportPaths {
  * @interface Loaders
  */
 interface Loaders {
-  [key: string]: moduleLoader;
+  [key: string]: ModuleLoader;
 }
 
 /**
@@ -30,11 +47,14 @@ interface Loaders {
  *
  * @interface moduleLoader
  */
-interface moduleLoader {
+interface ModuleLoader {
   moduleName?: string;
   id: string;
+  instantiationPromise?: Promise<string>;
+  exec?: () => Promise<any>;
   loadPromise: Promise<string>;
-  f?: Function;
+  dependencies?: string[];
+  module?: any;
 }
 
 /**
@@ -65,7 +85,9 @@ class Rqjs {
    */
   public constructor() {}
 
-  public require() {}
+  public require(dependencies: string[], callback: (...args: any[]) => void) {
+    this.__require(dependencies, callback);
+  }
 
   public config(importConfig: ImportConfig) {
     const { baseUrl, paths } = importConfig;
@@ -76,23 +98,155 @@ class Rqjs {
   private __require(
     dependencies: string[],
     callback: (...args: any[]) => void
-  ) {}
+  ): void {
+    // execute callback
+    this.curryExec(this, dependencies, callback)();
+  }
 
-  public define() {}
+  /**
+   * Define a module without dependencies.
+   *
+   * @param {string} id
+   * @param {(...args: any[]) => any} callback
+   * @memberof Rqjs
+   */
+  public define(id: string, callback: (...args: any[]) => any): void;
+  /**
+   * Define a module with dependencies.
+   *
+   * @param {string} id
+   * @param {string[]} dependencies
+   * @param {(...args: any[]) => any} callback
+   * @memberof Rqjs
+   */
+  public define(
+    id: string,
+    dependencies: string[],
+    callback: (...args: any[]) => any
+  ): void;
+  /**
+   * Implementation of define.
+   *
+   * @param {string} id
+   * @param {(string[] | typeof callback)} dependenciesOrCallback
+   * @param {(...args: any[]) => any} [callback]
+   * @memberof Rqjs
+   */
+  public define(
+    id: string,
+    dependenciesOrCallback: string[] | typeof callback,
+    callback?: (...args: any[]) => any
+  ) {
+    if (typeof dependenciesOrCallback === "function") {
+      this.__define(id, [], dependenciesOrCallback);
+    } else if (dependenciesOrCallback && callback) {
+      this.__define(id, dependenciesOrCallback, callback);
+    } else {
+      throw new Error(`[rqjs] Error in calling method "define"`);
+    }
+  }
 
   private __define(
-    modulename: string,
+    id: string,
     dependencies: string[],
     callback: (...args: any[]) => any
   ) {
+    let loader = this.loaders[id];
     if (
-      this.loaders.hasOwnProperty(modulename) &&
-      this.loaders[modulename] !== undefined
+      this.loaders.hasOwnProperty(id) &&
+      loader !== undefined &&
+      loader["exec"] !== undefined
     ) {
-      throw new Error(
-        `[Importjs] Duplicate registration for module name "${modulename}"`
-      );
+      throw new Error(`[rqjs] Duplicate registration for module name "${id}"`);
     }
+
+    const exec = this.curryExec(this, dependencies, callback);
+
+    if (loader) {
+      loader.exec = exec;
+      this.loaders[id] = loader;
+    } else {
+      this.loaders[id] = {
+        id,
+        loadPromise: Promise.resolve(id),
+        exec
+      };
+    }
+  }
+
+  /**
+   * Load dependencies, execute module function, return the export.
+   *
+   * @private
+   * @param {Rqjs} instance
+   * @param {string[]} dependencies
+   * @param {(...args: any[]) => any} callback
+   * @returns {() => Promise<any>}
+   * @memberof Rqjs
+   */
+  private curryExec(
+    instance: Rqjs,
+    dependencies: string[],
+    callback: (...args: any[]) => any
+  ): () => Promise<any> {
+    return function() {
+      const depLoaders = instance.getAllLoaders(instance, dependencies);
+      return Promise.all(depLoaders.map(loader => loader.loadPromise)).then(
+        (ids: string[]) => {
+          return Promise.all(
+            ids.map((id: string) => {
+              return instance.execLoader(instance, id);
+            })
+          ).then(loaders => {
+            const args = loaders.map(loader => loader.module);
+            return callback.apply(undefined, args);
+          });
+        }
+      );
+    };
+  }
+
+  /**
+   * Invoke execute function of loader and return.
+   *
+   * @private
+   * @param {Rqjs} instance
+   * @param {string} id
+   * @returns {Promise<ModuleLoader>}
+   * @memberof Rqjs
+   */
+  private execLoader(instance: Rqjs, id: string): Promise<ModuleLoader> {
+    const loader = instance.loaders[id];
+    if (loader.module) {
+      return Promise.resolve(loader);
+    } else {
+      if (!loader.exec) {
+        throw new Error(
+          `[rqjs] Can't get module ${id}'s definition. Did you register module properly?`
+        );
+      }
+      return loader
+        .exec()
+        .then(_export => {
+          loader.module = _export;
+        })
+        .then(() => loader);
+    }
+  }
+
+  /**
+   * Create all loader of deps.
+   *
+   * @private
+   * @param {Rqjs} instance
+   * @param {string[]} deps
+   * @returns {ModuleLoader[]}
+   * @memberof Rqjs
+   */
+  private getAllLoaders(instance: Rqjs, deps: string[]): ModuleLoader[] {
+    return deps.map(dep => {
+      return instance.getLoader(instance, dep);
+    });
   }
 
   /**
@@ -100,28 +254,28 @@ class Rqjs {
    *
    * @private
    * @param {Rqjs} instance
-   * @param {string[]} dep
+   * @param {string[]} deps
    * @returns
    * @memberof ImportJS
    */
-  private loadDependencies(instance: Rqjs, dep: string[]) {
+  private loadDependencies(instance: Rqjs, deps: string[]) {
     return Promise.all(
-      dep.map(function(id) {
+      deps.map(function(id) {
         return instance.loadScriptDependency(instance.resolvePath(id), id);
       })
     );
   }
 
   /**
-   * 
+   *
    *
    * @private
    * @param {Rqjs} instance
    * @param {string} id
-   * @returns {moduleLoader}
+   * @returns {ModuleLoader}
    * @memberof Rqjs
    */
-  private getLoader(instance: Rqjs, id: string): moduleLoader {
+  private getLoader(instance: Rqjs, id: string): ModuleLoader {
     let loader = instance.loaders[id];
     if (loader) {
       return loader;
