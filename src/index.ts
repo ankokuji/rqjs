@@ -1,25 +1,24 @@
 const hasSelf = typeof self !== "undefined";
-
 const envGlobal = hasSelf ? self : global;
 
 /**
+ * Config of Rqjs.
  *
- *
- * @interface ImportConfig
+ * @interface RqjsConfig
  */
-interface ImportConfig {
+interface RqjsConfig {
   /**
    * Config the baseUrl module should be fetch from.
    *
    * @type {string}
-   * @memberof ImportConfig
+   * @memberof RqjsConfig
    */
   baseUrl: string;
   /**
    * Definitions of fetch path for each module.
    *
    * @type {ImportPaths}
-   * @memberof ImportConfig
+   * @memberof RqjsConfig
    */
   paths: ImportPaths;
 }
@@ -48,19 +47,66 @@ interface Loaders {
  * @interface moduleLoader
  */
 interface ModuleLoader {
+  /**
+   * @deprecated
+   *
+   * @type {string}
+   * @memberof ModuleLoader
+   */
   moduleName?: string;
+  /**
+   * Module ID.
+   *
+   * @type {string}
+   * @memberof ModuleLoader
+   */
   id: string;
+  /**
+   * Maybe other format of module will use this.
+   * 
+   * @deprecated
+   *
+   * @type {Promise<string>}
+   * @memberof ModuleLoader
+   */
   instantiationPromise?: Promise<string>;
+  /**
+   * Implementation of module.
+   *
+   * @memberof ModuleLoader
+   */
   exec?: () => Promise<any>;
+  /**
+   * Load promise of module.
+   * If module's code is loaded, this will be resolved.
+   *
+   * @type {Promise<string>}
+   * @memberof ModuleLoader
+   */
   loadPromise: Promise<string>;
+  /**
+   * The dependencies of module.
+   * No use because actually deps was closured into exec function.
+   * 
+   * @deprecated
+   *
+   * @type {string[]}
+   * @memberof ModuleLoader
+   */
   dependencies?: string[];
+  /**
+   * The export of module.
+   *
+   * @type {*}
+   * @memberof ModuleLoader
+   */
   module?: any;
 }
 
 /**
  *
  *
- * @class ImportJS
+ * @class Rqjs
  */
 class Rqjs {
   private loaders: Loaders = {};
@@ -70,18 +116,18 @@ class Rqjs {
    *
    * @private
    * @type {string}
-   * @memberof ImportJS
+   * @memberof Rqjs
    */
   private baseUrl: string = "./";
 
   private modulePaths: ImportPaths = {};
 
   /**
-   * Creates an instance of ImportJS.
-   * Module will export an instance of ImportJS,
+   * Creates an instance of Rqjs.
+   * Module will export an instance of Rqjs,
    * so there is no arguments passed to constructor.
    *
-   * @memberof ImportJS
+   * @memberof Rqjs
    */
   public constructor() {}
 
@@ -89,7 +135,14 @@ class Rqjs {
     this.__require(dependencies, callback);
   }
 
-  public config(importConfig: ImportConfig) {
+  /**
+   * Config the baseUrl, paths of each module 
+   * in order to fetch from remote.
+   *
+   * @param {RqjsConfig} importConfig
+   * @memberof Rqjs
+   */
+  public config(importConfig: RqjsConfig) {
     const { baseUrl, paths } = importConfig;
     this.baseUrl = baseUrl;
     this.modulePaths = paths;
@@ -256,7 +309,7 @@ class Rqjs {
    * @param {Rqjs} instance
    * @param {string[]} deps
    * @returns
-   * @memberof ImportJS
+   * @memberof Rqjs
    */
   private loadDependencies(instance: Rqjs, deps: string[]) {
     return Promise.all(
@@ -299,7 +352,7 @@ class Rqjs {
    * @param {string} url
    * @param {string} id
    * @returns
-   * @memberof ImportJS
+   * @memberof Rqjs
    */
   private loadScriptDependency(url: string, id: string): Promise<string> {
     return new Promise(function(resolve, reject) {
@@ -311,12 +364,12 @@ class Rqjs {
         reject(new Error("Error loading " + url));
       });
       script.addEventListener("load", function() {
-        document.head.removeChild(script);
+        (document.head as HTMLHeadElement).removeChild(script);
         // Note URL normalization issues are going to be a careful concern here
         resolve(id);
       });
       script.src = url;
-      document.head.appendChild(script);
+      (document.head as HTMLHeadElement).appendChild(script);
     });
   }
 
@@ -326,7 +379,7 @@ class Rqjs {
    * @private
    * @param {string} id
    * @returns
-   * @memberof ImportJS
+   * @memberof Rqjs
    */
   private resolvePath(id: string) {
     return this.baseUrl + id;
@@ -337,7 +390,10 @@ class Rqjs {
   }
 }
 
-// Mount rqjs on global object.
-(envGlobal as any).rqjs = new Rqjs();
+// Avoid instantiation.
+const rqjs = (envGlobal as any).rqjs || new Rqjs();
 
-export default Rqjs;
+// Mount rqjs on global object.
+(envGlobal as any).rqjs = rqjs;
+
+export default rqjs;
