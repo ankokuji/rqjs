@@ -37,7 +37,7 @@ Then you can execute a function by:
 ```javascript
 import rqjs from "rqjs";
 
-rqjs.require(["moduleA", "moduleB], function(moduleA, moduleB) {
+rqjs.require(["moduleA", "moduleB"], function(moduleA, moduleB) {
   const moduleExport = someFunction(moduleA, moduleB);
   return moduleExport;
 })
