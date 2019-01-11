@@ -1,7 +1,14 @@
+/**
+ *
+ * NOTE: Avoid using async/await functions to reduce file size.
+ *
+ * Minimal implementation of module loader.
+ *
+ */
 (function() {
   const hasSelf = typeof self !== "undefined";
   const envGlobal = hasSelf ? self : global;
-  
+
   /**
    * Config of Rqjs.
    *
@@ -23,7 +30,7 @@
      */
     paths: ImportPaths;
   }
-  
+
   /**
    * Map of path definitions.
    *
@@ -32,7 +39,7 @@
   interface ImportPaths {
     [alias: string]: string;
   }
-  
+
   /**
    * Cache of imported module.
    *
@@ -41,7 +48,7 @@
   interface Loaders {
     [key: string]: ModuleLoader;
   }
-  
+
   /**
    * Module loader.
    *
@@ -64,7 +71,7 @@
     id: string;
     /**
      * Maybe other format of module will use this.
-     * 
+     *
      * @deprecated
      *
      * @type {Promise<string>}
@@ -88,7 +95,7 @@
     /**
      * The dependencies of module.
      * No use because actually deps was closured into exec function.
-     * 
+     *
      * @deprecated
      *
      * @type {string[]}
@@ -103,7 +110,7 @@
      */
     module?: any;
   }
-  
+
   /**
    *
    *
@@ -111,7 +118,7 @@
    */
   class Rqjs {
     private loaders: Loaders = {};
-  
+
     /**
      * Default base url for module.
      *
@@ -120,9 +127,9 @@
      * @memberof Rqjs
      */
     private baseUrl: string = "./";
-  
+
     private modulePaths: ImportPaths = {};
-  
+
     /**
      * Creates an instance of Rqjs.
      * Module will export an instance of Rqjs,
@@ -131,13 +138,13 @@
      * @memberof Rqjs
      */
     public constructor() {}
-  
+
     public require(dependencies: string[], callback: (...args: any[]) => void) {
       this.__require(dependencies, callback);
     }
-  
+
     /**
-     * Config the baseUrl, paths of each module 
+     * Config the baseUrl, paths of each module
      * in order to fetch from remote.
      *
      * @param {RqjsConfig} importConfig
@@ -148,15 +155,37 @@
       this.baseUrl = baseUrl;
       this.modulePaths = paths;
     }
-  
+
+    /**
+     * Import a module manually and return a Promise with module export.
+     *
+     * @param {string} id
+     * @returns {Promise<any>}
+     * @memberof Rqjs
+     */
+    public import(id: string): Promise<any> {
+      return this.loadDependenciesAndExecAll(this, [id])
+        .then(([loader]) => {
+          return loader.module;
+        })
+    }
+
+    /**
+     * Call the function after load all dependencies.
+     *
+     * @private
+     * @param {string[]} dependencies
+     * @param {(...args: any[]) => void} callback
+     * @memberof Rqjs
+     */
     private __require(
       dependencies: string[],
       callback: (...args: any[]) => void
     ): void {
       // execute callback
-      this.curryExec(this, dependencies, callback)();
+      this.higherOrderExec(this, dependencies, callback)();
     }
-  
+
     /**
      * Define a module without dependencies.
      *
@@ -199,7 +228,7 @@
         throw new Error(`[rqjs] Error in calling method "define"`);
       }
     }
-  
+
     private __define(
       id: string,
       dependencies: string[],
@@ -211,25 +240,26 @@
         loader !== undefined &&
         loader["exec"] !== undefined
       ) {
-        throw new Error(`[rqjs] Duplicate registration for module name "${id}"`);
+        throw new Error(
+          `[rqjs] Duplicate registration for module name "${id}"`
+        );
       }
-  
-      const exec = this.curryExec(this, dependencies, callback);
-  
+
+      // Use higher order function because module need not to be executed immediately.
+      // Otherwise this should be invoded when this module is depended.
+      const exec = this.higherOrderExec(this, dependencies, callback);
+
       if (loader) {
         loader.exec = exec;
         this.loaders[id] = loader;
       } else {
-        this.loaders[id] = {
-          id,
-          loadPromise: Promise.resolve(id),
-          exec
-        };
+        this.loaders[id] = { id, loadPromise: Promise.resolve(id), exec };
       }
     }
-  
+
     /**
      * Load dependencies, execute module function, return the export.
+     * First load all denpendencies and inject them as argument into function callback.
      *
      * @private
      * @param {Rqjs} instance
@@ -238,28 +268,46 @@
      * @returns {() => Promise<any>}
      * @memberof Rqjs
      */
-    private curryExec(
+    private higherOrderExec(
       instance: Rqjs,
       dependencies: string[],
       callback: (...args: any[]) => any
     ): () => Promise<any> {
       return function() {
-        const depLoaders = instance.getAllLoaders(instance, dependencies);
-        return Promise.all(depLoaders.map(loader => loader.loadPromise)).then(
-          (ids: string[]) => {
-            return Promise.all(
-              ids.map((id: string) => {
-                return instance.execLoader(instance, id);
-              })
-            ).then(loaders => {
-              const args = loaders.map(loader => loader.module);
-              return callback.apply(undefined, args);
-            });
-          }
-        );
+        return instance
+          .loadDependenciesAndExecAll(instance, dependencies)
+          .then(loaders => {
+            const args = loaders.map(loader => loader.module);
+            return callback.apply(undefined, args);
+          });
       };
     }
-  
+
+    /**
+     * Load dependencies and iterally execute all modules to get export.
+     *
+     * @private
+     * @param {Rqjs} instance
+     * @param {string[]} dependencies
+     * @returns {Promise<any[]>}
+     * @memberof Rqjs
+     */
+    private loadDependenciesAndExecAll(
+      instance: Rqjs,
+      dependencies: string[]
+    ): Promise<ModuleLoader[]> {
+      const depLoaders = instance.getAllLoaders(instance, dependencies);
+      return Promise.all(depLoaders.map(loader => loader.loadPromise)).then(
+        (ids: string[]) => {
+          return Promise.all(
+            ids.map((id: string) => {
+              return instance.execLoader(instance, id);
+            })
+          );
+        }
+      );
+    }
+
     /**
      * Invoke execute function of loader and return.
      *
@@ -276,9 +324,11 @@
       } else {
         if (!loader.exec) {
           throw new Error(
-            `[rqjs] Can't get module ${id}'s definition. Did you register module properly? \n`
-            + `Please check config for baseUrl and paths is right:\n`
-            + `-- baseUrl: ${instance.baseUrl} -- path: ${instance.modulePaths[id] || ""}`
+            `[rqjs] Can't get module ${id}'s definition. Did you register module properly? \n` +
+              `Please check config for baseUrl and paths is right:\n` +
+              `-- baseUrl: ${instance.baseUrl} -- path: ${instance.modulePaths[
+                id
+              ] || ""}`
           );
         }
         return loader
@@ -289,7 +339,7 @@
           .then(() => loader);
       }
     }
-  
+
     /**
      * Create all loader of deps.
      *
@@ -304,26 +354,11 @@
         return instance.getLoader(instance, dep);
       });
     }
-  
+
     /**
-     * @deprecated
-     *
-     * @private
-     * @param {Rqjs} instance
-     * @param {string[]} deps
-     * @returns
-     * @memberof Rqjs
-     */
-    private loadDependencies(instance: Rqjs, deps: string[]) {
-      return Promise.all(
-        deps.map(function(id) {
-          return instance.loadScriptDependency(instance.resolvePath(id), id);
-        })
-      );
-    }
-  
-    /**
-     *
+     * Init loader of target module. 
+     * If module doesn't exit then load the module. 
+     * Mount the load promise on loader.
      *
      * @private
      * @param {Rqjs} instance
@@ -336,20 +371,17 @@
       if (loader) {
         return loader;
       }
-  
+
       const loadPromise = instance.loadScriptDependency(
         instance.resolvePath(id),
         id
       );
-  
-      return (instance.loaders[id] = {
-        id,
-        loadPromise
-      });
+
+      return (instance.loaders[id] = { id, loadPromise });
     }
-  
+
     /**
-     * Load dependency by url.
+     * Load dependency from remote url.
      *
      * @private
      * @param {string} url
@@ -375,9 +407,10 @@
         (document.head as HTMLHeadElement).appendChild(script);
       });
     }
-  
+
     /**
      * A naive implementation.
+     * This should be rewrite to be more robust.
      *
      * @private
      * @param {string} id
@@ -388,15 +421,12 @@
       const path = this.modulePaths[id] || id;
       return this.baseUrl + path;
     }
-  
-    private __mount(modulename: string, module: any) {
-      this.loaders[modulename] = module;
-    }
+
   }
-  
+
   // Avoid instantiation.
   const rqjs = (envGlobal as any).rqjs || new Rqjs();
-  
+
   // Mount rqjs on global object.
   (envGlobal as any).rqjs = rqjs;
-})()
+})();
