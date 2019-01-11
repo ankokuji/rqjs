@@ -1,4 +1,6 @@
-import rqjs from "../src/index";
+import "../src/index";
+
+declare const rqjs: any;
 
 rqjs.define("mod", function() {
   return {
